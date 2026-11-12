@@ -396,22 +396,39 @@ function openLB(src,cap){lb.querySelector("img").src=src;lb.querySelector("div")
 lb.onclick=()=>lb.classList.remove("on");
 // ---------- map interactions ----------
 const ptrs=new Map();
-let drag=null,pinch=null,moved=false,suppressClick=false,gest=null;
+let drag=null,pinch=null,moved=false,suppressClick=false,gest=null,tapEl=null;
 function ptrMid(){const a=[...ptrs.values()];return {x:(a[0].x+a[1].x)/2,y:(a[0].y+a[1].y)/2};}
 function ptrDist(){const a=[...ptrs.values()];return Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y)||1;}
 function loc(x,y){const r=vp.getBoundingClientRect();return {x:x-r.left,y:y-r.top};}
+function activateNode(el){
+  const d=el&&el.closest&&el.closest(".node");if(!d)return false;
+  const n=byId.get(d.dataset.id);if(!n)return false;
+  if(el.closest&&el.closest("a"))return false;
+  if(el.closest&&el.closest("img.pic")){select(n);openLB(el.closest("img.pic").getAttribute("src"),n.t);return true;}
+  toggle(n);select(n);if(n.open&&n.ch.length)ensureVisible(n.ch[n.ch.length-1]),ensureVisible(n);
+  return true;
+}
 vp.addEventListener("pointerdown",e=>{
   if(e.pointerType==="mouse"&&e.button!==0)return;
   if(e.target.closest("#zoomui"))return;
+  const onNode=e.target.closest(".node");
   ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
   if(ptrs.size===2){
     const m=ptrMid(),L=loc(m.x,m.y);
     pinch={d:ptrDist(),scale,tx,ty,lx:L.x,ly:L.y};
-    drag=null;moved=true;suppressClick=true;
+    drag=null;moved=true;suppressClick=true;tapEl=null;
     e.preventDefault();
     return;
   }
-  drag={x:e.clientX,y:e.clientY,tx,ty};moved=false;
+  // Мышь по узлу — как раньше: не начинаем перетаскивание, сработает обычный клик
+  if(e.pointerType==="mouse"&&onNode){
+    drag=null;tapEl=null;moved=false;suppressClick=false;
+    ptrs.delete(e.pointerId);
+    return;
+  }
+  drag={x:e.clientX,y:e.clientY,tx,ty};
+  moved=false;suppressClick=false;
+  tapEl=e.target;
   try{vp.setPointerCapture(e.pointerId);}catch(_){}
 },{passive:false});
 vp.addEventListener("pointermove",e=>{
@@ -425,39 +442,47 @@ vp.addEventListener("pointermove",e=>{
   }
   if(drag&&!pinch){
     const dx=e.clientX-drag.x,dy=e.clientY-drag.y;
-    const th=e.pointerType==="mouse"?3:8;
-    if(Math.abs(dx)+Math.abs(dy)>th){moved=true;suppressClick=true;vp.classList.add("drag");markUser();}
+    const th=e.pointerType==="mouse"?6:16;
+    if(Math.hypot(dx,dy)>th){moved=true;suppressClick=true;tapEl=null;vp.classList.add("drag");markUser();}
     if(moved){tx=drag.tx+dx;ty=drag.ty+dy;applyView();e.preventDefault();}
   }
 },{passive:false});
 function endPtr(e){
+  const isTap=!moved&&!pinch&&!!tapEl&&!!drag&&e.pointerType!=="mouse"&&e.type==="pointerup";
+  const el=tapEl;
   ptrs.delete(e.pointerId);
   if(ptrs.size<2)pinch=null;
   if(ptrs.size===0){
-    drag=null;vp.classList.remove("drag");
+    drag=null;vp.classList.remove("drag");tapEl=null;
+    if(isTap){
+      activateNode(el);
+      suppressClick=true; // если следом придёт click — не переключать ветку второй раз
+    }
     setTimeout(()=>{suppressClick=false;moved=false;},80);
   }else if(ptrs.size===1){
     const p=[...ptrs.values()][0];
     drag={x:p.x,y:p.y,tx,ty};
+    tapEl=null;
   }
 }
-vp.addEventListener("pointerup",endPtr);vp.addEventListener("pointercancel",endPtr);
-vp.addEventListener("lostpointercapture",e=>{if(ptrs.has(e.pointerId))endPtr(e);});
-// Safari pinch (gesture events); skip if two-pointer pinch already running
+vp.addEventListener("pointerup",endPtr);
+vp.addEventListener("pointercancel",e=>{tapEl=null;endPtr(e);});
+// Safari pinch: не глушим обычное нажатие, пока нет реального щипка
 vp.addEventListener("gesturestart",e=>{
   e.preventDefault();
   if(pinch)return;
   const L=loc(e.clientX,e.clientY);
   gest={scale,tx,ty,lx:L.x,ly:L.y};
-  moved=true;suppressClick=true;
 },{passive:false});
 vp.addEventListener("gesturechange",e=>{
   e.preventDefault();
   if(!gest||pinch)return;
+  if(Math.abs(e.scale-1)<0.03)return;
   const L=loc(e.clientX,e.clientY);
   const ns=Math.max(0.04,Math.min(3,gest.scale*e.scale));
   const wx=(gest.lx-gest.tx)/gest.scale,wy=(gest.ly-gest.ty)/gest.scale;
   scale=ns;tx=L.x-wx*ns;ty=L.y-wy*ns;applyView();
+  moved=true;suppressClick=true;tapEl=null;markUser();
 },{passive:false});
 vp.addEventListener("gestureend",e=>{e.preventDefault();gest=null;},{passive:false});
 function zoomAt(f,cx,cy){const ns=Math.max(0.04,Math.min(3,scale*f));const r=vp.getBoundingClientRect();cx=(cx===undefined?r.width/2:cx-r.left);cy=(cy===undefined?r.height/2:cy-r.top);tx=cx-(cx-tx)*ns/scale;ty=cy-(cy-ty)*ns/scale;scale=ns;applyView();markUser();}
